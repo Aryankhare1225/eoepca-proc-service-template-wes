@@ -4,7 +4,7 @@ import json
 import logging
 import os
 import pathlib
-
+from loguru import logger
 import yaml
 #import zoo
 import zoo_wes_runner
@@ -22,65 +22,26 @@ from pystac.stac_io import DefaultStacIO, StacIO
 from pystac.item_collection import ItemCollection
 from zoo_calrissian_runner import ZooCalrissianRunner
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../zoo-runner-common')))
-from base_handler import ExecutionHandler
+#sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../zoo-runner-common')))
+#from base_handler import ExecutionHandler
 
+from common_execution_handler import CommonExecutionHandler
+from common_stac_io import CustomStacIO
 
 from zoostub import ZooStub
 zoo = ZooStub()
 
 
-class CustomStacIO(DefaultStacIO):
-    """Custom STAC IO class that uses boto3 to read from S3."""
-
-    def __init__(self):
-        self.session = botocore.session.Session()
-        self.s3_client = self.session.create_client(
-            service_name="s3",
-            region_name=os.environ.get("AWS_REGION"),
-            endpoint_url=os.environ.get("AWS_S3_ENDPOINT"),
-            aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID"),
-            aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_KEY"),
-            verify=True,
-            use_ssl=True,
-            config=Config(s3={"addressing_style": "path", "signature_version": "s3v4"}),
-        )
-
-    def read_text(self, source, *args, **kwargs):
-        parsed = urlparse(source)
-        if parsed.scheme == "s3":
-            return (
-                self.s3_client.get_object(Bucket=parsed.netloc, Key=parsed.path[1:])[
-                    "Body"
-                ]
-                .read()
-                .decode("utf-8")
-            )
-        else:
-            return super().read_text(source, *args, **kwargs)
-
-    def write_text(self, dest, txt, *args, **kwargs):
-        parsed = urlparse(dest)
-        if parsed.scheme == "s3":
-            self.s3_client.put_object(
-                Body=txt.encode("UTF-8"),
-                Bucket=parsed.netloc,
-                Key=parsed.path[1:],
-                ContentType="application/geo+json",
-            )
-        else:
-            super().write_text(dest, txt, *args, **kwargs)
-
 
 StacIO.set_default(CustomStacIO)
 
 
-class WESRunnerExecutionHandler:
+class WESRunnerExecutionHandler( CommonExecutionHandler ):
     def __init__(self, **kwargs):
         self.__dict__.update(kwargs)
         self.job_id = None
 
-    def post_execution_hook(self, log, output, usage_report, tool_logs):
+    def post_execution_hook(self, log, output, usage_report, tool_logs, **kwargs):
 
         myKey=list(output.keys())[0]
         # unset HTTP proxy or else the S3 client will use it and fail
@@ -148,7 +109,7 @@ class WESRunnerExecutionHandler:
         self.results = item_collection.to_dict()
         self.results["id"] = collection_id
 
-    def local_get_file(self, fileName):
+    def local_get_file(self, fileName, **kwargs):
         """
         Read and load a yaml file
 
@@ -173,33 +134,19 @@ class WESRunnerExecutionHandler:
     def set_job_id(self, job_id):
         self.job_id = job_id
 
-    def get_pod_env_vars(self):
-        zoo.info("get_pod_env_vars")
 
-        return self.conf.get("pod_env_vars", {})
-
-    def get_pod_node_selector(self):
-        zoo.info("get_pod_node_selector")
-
-        return self.conf.get("pod_node_selector", {})
-
-    def get_secrets(self):
-        zoo.info("get_secrets")
-
-        return self.local_get_file("/assets/pod_imagePullSecrets.yaml")
-
-    def get_additional_parameters(self):
+    def get_additional_parameters(self, **kwargs):
         zoo.info("get_additional_parameters")
         additional_parameters: Dict[str, str] = {}
         additional_parameters = self.conf.get("additional_parameters", {})
 
         additional_parameters["sub_path"] = self.conf["lenv"]["usid"]
 
-        zoo.info(f"additional_parameters: {additional_parameters.keys()}")
+        logger.info(f"additional_parameters: {additional_parameters.keys()}")
 
         return additional_parameters
 
-    def handle_outputs(self, log, output, usage_report, tool_logs):
+    def handle_outputs(self, log, output, usage_report, tool_logs, **kwargs):
         os.makedirs(
             os.path.join(self.conf["main"]["tmpPath"], self.job_id),
             mode=0o777,
